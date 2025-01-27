@@ -1,99 +1,130 @@
-import streamlit as st  # type: ignore
-import pandas as pd
-from data_insights import generate_summary
-from query_processor import process_query
-from code_executor import run_generated_code
-import warnings
+from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+import os
+import google.generativeai as genai
+import random
+import json
+import logging
+from flask_cors import CORS
 
-warnings.filterwarnings("ignore")
+# Load environment variables
+load_dotenv()
 
-# Streamlit App UI
-st.title("Data Navigator: Simplify Exploration")
+# Function to randomly select an API key
+def get_random_api_key():
+    gemini_api_keys = os.getenv("GEMINI_API_KEYS")
+    if gemini_api_keys:
+        api_keys = gemini_api_keys.split(",")
+        selected_key = random.choice(api_keys)  # Randomly select one key
+        logging.info(f"Selected API key: {selected_key}")  # Log the selected key
+        return selected_key
+    else:
+        raise ValueError("GEMINI_API_KEYS not set in the .env file.")
 
-# File uploader
-uploaded_file = st.file_uploader("Upload a CSV file to start exploring your data:", type=["csv"])
+# Configure Gemini API with a random API key
+api_key = get_random_api_key()
+genai.configure(api_key=api_key)
+print(f"Using API key: {api_key}")
 
-if uploaded_file:
-    # Read dataset
-    dataset = pd.read_csv(uploaded_file)
-    
-    # Generate data summary
-    data_summary = generate_summary(dataset)
-    
-    # Display dataset snapshot
-    st.write("### Dataset Snapshot:")
-    st.dataframe(dataset.head())
+# Initialize Flask app
+app = Flask(__name__)
+CORS(app)  # Enable CORS for all origins
 
-    # # Display data summary
-    # if st.checkbox("View Dataset Summary"):
-    #     st.write("### Dataset Summary:")
-    #     st.text(data_summary)
+# Function to extract numbered points from response
+def extract_numbered_points(text):
+    try:
+        json_start = text.find('```json\n[')
+        json_end = text.find(']\n```')
+        if json_start != -1 and json_end != -1:
+            json_str = text[json_start + 7:json_end + 1]
+            return json.loads(json_str)
+        else:
+            return [text.strip()]
+    except json.JSONDecodeError as e:
+        return [f"Malformed JSON: {e}"]
+    except Exception as e:
+        return [f"Unexpected error: {e}"]
 
-    # Detailed data insights
-    if st.checkbox("View Detailed Data Insights"):
-        tabs = st.tabs(["Null Values", "Unique Values", "Duplicate Records", "Descriptive Stats", "Numeric Summary"])
+# Default route
+@app.route("/")
+def home():
+    return jsonify({"message": "Welcome to my API!"})
 
-        # Null values
-        with tabs[0]:
-            null_counts = dataset.isnull().sum()
-            st.write("Null Values by Column:")
-            st.dataframe(null_counts)
-            st.write(f"**Total Null Values:** {null_counts.sum()}")
+# Endpoint to generate content creation prompts
+@app.route("/generate_prompts", methods=["POST"])
+def generate_prompts():
+    try:
+        data = request.json
+        # Validate input fields
+        required_fields = ["content_type", "audience_type", "delivery_method", "content_theme", "target_industry"]
+        if not all(field in data for field in required_fields):
+            return jsonify({"error": "Missing required fields in the request."}), 400
 
-        # Unique values
-        with tabs[1]:
-            unique_counts = {col: dataset[col].nunique() for col in dataset.columns}
-            st.write("Unique Values by Column:")
-            st.dataframe(pd.DataFrame(list(unique_counts.items()), columns=["Column", "Unique Count"]))
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-pro",
+            generation_config={
+                "temperature": 1,
+                "top_p": 0.95,
+                "top_k": 40,
+                "max_output_tokens": 8192,
+                "response_mime_type": "text/plain",
+            },
+            system_instruction="You are expert at prompt engineering and your goal is to write prompts helping the trainers to create professional and relevant content."
+        )
 
-        # Duplicate records
-        with tabs[2]:
-            duplicate_count = dataset.duplicated().sum()
-            st.write(f"**Total Duplicate Records:** {duplicate_count}")
+        chat_session = model.start_chat(
+            history=[
+                {
+                    "role": "user",
+                    "parts": [
+                        f"""Generate 4 content creation prompts to help trainers generate content based on the following inputs:
+                        \nContent Type - {data['content_type']}\nAudience Type - {data['audience_type']}\nDelivery Method - {data['delivery_method']}
+                        \nContent Theme - {data['content_theme']}\nTarget Industry - {data['target_industry']}
+                        \nPlease format your response as a JSON array."""
+                    ],
+                }
+            ]
+        )
+        response = chat_session.send_message("Generate the content creation prompts.")
+        prompts = extract_numbered_points(response.text)
 
-        # Descriptive statistics
-        with tabs[3]:
-            st.write("Statistical Summary:")
-            st.dataframe(dataset.describe())
+        if not prompts:
+            return jsonify({"error": "Error extracting prompts. Please check the API response format."}), 500
 
-        # Numeric column summary
-        with tabs[4]:
-            numeric_columns = dataset.select_dtypes(include="number")
-            if not numeric_columns.empty:
-                st.write("Numeric Column Summary:")
-                numeric_summary = numeric_columns.describe().T
-                st.dataframe(numeric_summary)
-            else:
-                st.write("No numeric columns in the dataset.")
+        return jsonify({"prompts": prompts})
+    except Exception as e:
+        return jsonify({"error": f"Error generating prompts: {e}"}), 500
 
-    # Query input for data exploration
-    st.subheader("Ask Questions About Your Data")
-    query = st.text_input("Enter a question about the data:")
+# Endpoint to ask a specific prompt to Gemini API
+@app.route("/ask-gemini", methods=["POST"])
+def ask_gemini():
+    try:
+        data = request.json
+        print(data)
+        # Validate the input
+        if "prompt" not in data:
+            return jsonify({"error": "Missing 'prompt' in the request."}), 400
 
-    if query:
-        with st.spinner("Analyzing your query..."):
-            try:
-                # Generate code from the query
-                generated_code = process_query(query, data_summary)
+        selected_prompt = data["prompt"]
+        print(selected_prompt)
 
-                if st.checkbox("Display Generated Code"):
-                    st.code(generated_code, language="python")
+        # Send the selected prompt to Gemini
+        chat_session = genai.GenerativeModel(
+            model_name="gemini-1.5-pro"
+        ).start_chat(
+            history=[{
+                "role": "user",
+                "parts": [selected_prompt]
+            }]
+        )
+        print(chat_session)
 
-                # Execute the generated code
-                execution_results, execution_output = run_generated_code(generated_code, dataset)
+        response = chat_session.send_message(selected_prompt)
+        print(response)
+        return jsonify({"response": response.text})
+    except Exception as e:
+        return jsonify({"error": f"Error: {e}"}), 500
 
-                # Display results
-                if execution_output:
-                    st.write(execution_output)
-                
-                # Handle matplotlib plots
-                if "plt" in execution_results:
-                    st.pyplot(execution_results["plt"].gcf())  # type: ignore
-                
-                # Handle general execution results
-                if isinstance(execution_results, str):
-                    st.error(execution_results)
-                else:
-                    st.success("Code executed successfully!")
-            except Exception as execution_error:
-                st.error(f"An error occurred during code execution: {execution_error}")
+# Run the Flask app
+if __name__ == "__main__":
+    app.run(debug=True)
