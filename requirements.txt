@@ -1,4 +1,4 @@
-streamlit
-groq
-pandas
-matplotlib
+Flask
+pydantic
+python-dotenv
+google-generativeai
