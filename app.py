@@ -106,7 +106,7 @@ def ask_gemini():
             return jsonify({"error": "Missing 'prompt' in the request."}), 400
 
         selected_prompt = data["prompt"]
-        print(selected_prompt)
+        # print(selected_prompt)
 
         # Send the selected prompt to Gemini
         chat_session = genai.GenerativeModel(
@@ -117,7 +117,7 @@ def ask_gemini():
                 "parts": [selected_prompt]
             }]
         )
-        print(chat_session)
+        # print(chat_session)
 
         response = chat_session.send_message(selected_prompt)
         print(response)
