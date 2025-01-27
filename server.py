@@ -6,6 +6,9 @@ import google.generativeai as genai
 import json
 import random
 import logging
+from app import app  # Assuming 'app' is the Flask instance in app.py
+
+
 
 
 # Load environment variables
