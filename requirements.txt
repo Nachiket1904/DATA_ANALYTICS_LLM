@@ -2,3 +2,4 @@ Flask
 pydantic
 python-dotenv
 google-generativeai
+gunicorn
