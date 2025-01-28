@@ -1,7 +1,9 @@
-Flask
+fastapi
 pydantic
 python-dotenv
 google-generativeai
 gunicorn
-Werkzeug==2.2.3
+werkzeug==2.2.3
 flask-cors==4.0.0
+httpx
+asyncio
